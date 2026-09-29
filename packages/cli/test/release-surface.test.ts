@@ -45,7 +45,7 @@ function hasRef(ref: string): boolean {
 // unit tests included. Skip those two blocks locally when the tags are absent; CI clones with
 // full history, so there a missing tag still fails loudly.
 const hasReleaseTags = hasRef(FROM) && hasRef(TO);
-const skipTagTests = !hasReleaseTags && !process.env.CI;
+const skipTagTests = !hasReleaseTags && process.env.CI !== "true";
 if (skipTagTests) {
   console.warn(`release-surface: tags ${FROM}/${TO} not found; skipping tag-diff tests (git fetch --tags to run them)`);
 }
