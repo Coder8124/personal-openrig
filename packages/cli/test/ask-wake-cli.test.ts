@@ -134,6 +134,27 @@ describe("rig ask --wake (L3 CLI)", () => {
     expect(exitCode).toBe(2);
   });
 
+  it("rejects a non-numeric --wake-timeout before waking, instead of crashing in execFile", async () => {
+    // NaN reached execFile's timeout option, which throws ERR_OUT_OF_RANGE (a stack trace, no JSON).
+    const runner: WakeRunner = vi.fn(async () => ({ stdout: "x", stderr: "", code: 0, timedOut: false }));
+    const { logs, exitCode } = await captureLogs(async () => {
+      await makeCmd(tokenDeps(runner)).parseAsync(["node", "rig", "ask", "my-rig", "q", "--wake", "tok", "--wake-timeout", "abc"]);
+    });
+    expect(runner).not.toHaveBeenCalled();
+    expect(logs.join("\n")).toContain("--wake-timeout must be a number of seconds; got 'abc'");
+    expect(exitCode).toBe(1);
+  });
+
+  it("passes a whole-millisecond timeout for fractional --wake-timeout seconds", async () => {
+    // execFile also rejects a fractional timeout: 1.0005s must not become 1000.5ms.
+    const runner: WakeRunner = vi.fn(async () => ({ stdout: "x", stderr: "", code: 0, timedOut: false }));
+    await captureLogs(async () => {
+      await makeCmd(tokenDeps(runner)).parseAsync(["node", "rig", "ask", "my-rig", "q", "--wake", "tok", "--wake-timeout", "1.0005"]);
+    });
+    const call = (runner as unknown as { mock: { calls: [string, string[], { timeoutMs: number }][] } }).mock.calls[0]!;
+    expect(Number.isInteger(call[2].timeoutMs)).toBe(true);
+  });
+
   it("renders a FAILED wake honestly (exit N + stderr), non-zero exit — never a fake success", async () => {
     const runner: WakeRunner = vi.fn(async () => ({ stdout: "", stderr: "resume: invalid session token", code: 1, timedOut: false }));
     const { logs, exitCode } = await captureLogs(async () => {

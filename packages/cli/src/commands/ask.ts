@@ -126,7 +126,14 @@ Exit codes:
     // an unresolvable seat REFUSES with teaching (never a guessed wake).
     if (opts.wake) {
       const target = opts.wake;
-      const timeoutMs = opts.wakeTimeout ? Math.max(1, Number(opts.wakeTimeout)) * 1000 : undefined;
+      // execFile throws on a NaN, infinite or fractional timeout, so validate and round here.
+      const wakeTimeoutSeconds = opts.wakeTimeout ? Number(opts.wakeTimeout) : undefined;
+      if (wakeTimeoutSeconds !== undefined && !Number.isFinite(wakeTimeoutSeconds)) {
+        console.error(`--wake-timeout must be a number of seconds; got '${opts.wakeTimeout}'`);
+        process.exitCode = 1;
+        return;
+      }
+      const timeoutMs = wakeTimeoutSeconds !== undefined ? Math.round(Math.max(1, wakeTimeoutSeconds) * 1000) : undefined;
 
       let token = target;
       let runtime: "claude" | "codex" = opts.runtime === "codex" ? "codex" : "claude";
