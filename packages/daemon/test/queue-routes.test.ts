@@ -1652,6 +1652,16 @@ describe("queue routes", () => {
       const res = await app.request("/api/queue/whoami");
       expect(res.status).toBe(400);
     });
+
+    it("GET /api/queue/whoami returns 400 for a recentLimit that is not a whole number", async () => {
+      for (const value of ["abc", "1.5", "-1", "2x"]) {
+        const res = await app.request(`/api/queue/whoami?session=bob@r&recentLimit=${value}`);
+        expect(res.status, value).toBe(400);
+        expect(await res.json()).toEqual({ error: "recentLimit must be a non-negative integer" });
+      }
+      const ok = await app.request("/api/queue/whoami?session=bob@r&recentLimit=5");
+      expect(ok.status).toBe(200);
+    });
   });
 
   describe("R1 SSE route — live GET reaches the SSE handler (not shadowed by /:qitemId)", () => {
