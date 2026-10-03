@@ -822,12 +822,13 @@ export function queueRoutes(): Hono {
   app.get("/whoami", (c) => {
     const session = c.req.query("session");
     if (!session) return c.json({ error: "session is required" }, 400);
-    // Out-of-range values are clamped by whoami; a non-number would reach SQL as NaN.
-    const rawRecentLimit = c.req.query("recentLimit");
-    if (rawRecentLimit && !/^\d+$/.test(rawRecentLimit)) {
-      return c.json({ error: "recentLimit must be a non-negative integer" }, 400);
+    const recentLimit = c.req.query("recentLimit")
+      ? Number.parseInt(c.req.query("recentLimit")!, 10)
+      : undefined;
+    // whoami clamps any number to 1..200, but NaN passes the clamp and reaches SQL.
+    if (Number.isNaN(recentLimit)) {
+      return c.json({ error: "recentLimit must be a number" }, 400);
     }
-    const recentLimit = rawRecentLimit ? Number.parseInt(rawRecentLimit, 10) : undefined;
     const repo = getRepo(c);
     const position = repo.whoami(session, { recentLimit });
     // OPR.0.5.8.14: the derived work node rides the verb that already answers "what does
