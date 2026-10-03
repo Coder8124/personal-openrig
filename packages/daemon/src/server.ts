@@ -81,7 +81,7 @@ import { configRoutes } from "./routes/config.js";
 import { hostsRoutes } from "./routes/hosts.js";
 import { hostReadThrough } from "./domain/hosts/read-through.js";
 import { apiOriginProtection } from "./middleware/origin-guard.js";
-import { jsonBodyErrorHandler } from "./middleware/json-body-error.js";
+import { jsonBodyErrorHandler, trackJsonBodyParseErrors } from "./middleware/json-body-error.js";
 import { getSelfHostId, getSelfHostIdSource } from "./domain/hosts/fanout-contract.js";
 import { contextPacksRoutes } from "./routes/context-packs.js";
 import { agentImagesRoutes } from "./routes/agent-images.js";
@@ -495,6 +495,7 @@ export function createApp(deps: AppDeps): Hono {
 
   const app = new Hono();
   // A malformed request body is a 400, not the default 500.
+  app.use("*", trackJsonBodyParseErrors);
   app.onError(jsonBodyErrorHandler);
   const permissionDriftObserver = deps.permissionDriftObserver
     ?? new PermissionDriftObserver({ db: deps.rigRepo.db });
