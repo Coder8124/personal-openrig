@@ -266,6 +266,31 @@ export async function observeClaudePaneStartedAt(input: Parameters<typeof observ
   return (await verifyClaudePaneRuntime(input))?.process.startedAt ?? null;
 }
 
+/** A launcher shim that spawns (rather than execs) Claude leaves several Claude
+ * processes on one parent chain. That chain is one runtime: the deepest process
+ * receives input, and a shim's argv may carry the identity its child lacks.
+ * Returns the chain deepest-first, or null when candidates sit on separate
+ * branches, which stays ambiguous. */
+function claudeLauncherChain(candidates: NativeProcessObservation[], rows: NativeProcessRow[]): NativeProcessObservation[] | null {
+  if (candidates.length <= 1) return candidates;
+  const byPid = new Map(rows.map((row) => [row.pid, row]));
+  const ancestors = (observation: NativeProcessObservation): Set<number> => {
+    const seen = new Set<number>();
+    let current = byPid.get(observation.process.ppid);
+    while (current && !seen.has(current.pid)) {
+      seen.add(current.pid);
+      if (current.pid === observation.panePid) break;
+      current = byPid.get(current.ppid);
+    }
+    return seen;
+  };
+  const deepest = candidates.find((candidate) => {
+    const above = ancestors(candidate);
+    return candidates.every((other) => other === candidate || above.has(other.process.pid));
+  });
+  return deepest ? [deepest, ...candidates.filter((candidate) => candidate !== deepest)] : null;
+}
+
 export interface ClaudeDeliveryObservation {
   state: "verified" | "unknown" | "idle_shell" | "conflict";
   detail: string;
@@ -280,11 +305,15 @@ export async function observeClaudeDelivery(input: Parameters<typeof observeNati
       if (!pid) return unknown;
       const rows = await (input.listProcesses ?? listNativeProcesses)();
       const candidates = nativeProcessCandidates(rows, pid, "claude-code", input.selectedExecutable);
-      if (candidates.length > 1) return { state: "conflict", detail: "Multiple Claude processes occupy the bound foreground" };
-      const native = candidates[0];
+      const chain = claudeLauncherChain(candidates, rows);
+      if (!chain) return { state: "conflict", detail: "Multiple Claude processes occupy the bound foreground" };
+      const native = chain[0];
       if (native) {
-        const token = claudeSessionToken(tokens(native.process.command).slice(1));
         const fingerprint = native.fingerprint;
+        const named = new Set(chain.map((link) => claudeSessionToken(tokens(link.process.command).slice(1)))
+          .filter((value): value is string => value !== null));
+        if (named.size > 1) return { state: "conflict", detail: "Claude processes in the bound foreground name different conversations", fingerprint };
+        const token = [...named][0];
         if (!token || !input.expectedToken) return { ...unknown, fingerprint };
         return token === input.expectedToken
           ? { state: "verified", detail: "Expected Claude conversation in the bound foreground", fingerprint }
