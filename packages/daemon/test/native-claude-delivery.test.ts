@@ -23,6 +23,7 @@ const modes = [
   "launcher-shim", "launcher-shim-mixed-token", "launcher-shim-siblings",
   "launcher-shim-match", "launcher-shim-match-after", "launcher-shim-child-differs",
   "launcher-shim-child-differs-after", "launcher-shim-child-unparsed",
+  "launcher-shim-shims-differ", "launcher-shim-child-two-sessions", "settings-single",
 ];
 // The real process behind a spawning shim carries its own argv.
 const shimChild: Record<string, string> = {
@@ -31,6 +32,7 @@ const shimChild: Record<string, string> = {
   "launcher-shim-child-differs": "--settings /shim/settings.json --session-id different",
   "launcher-shim-child-differs-after": "--session-id different --settings /shim/settings.json",
   "launcher-shim-child-unparsed": "--settings /shim/settings.json --unrecognised-flag",
+  "launcher-shim-child-two-sessions": `--settings /shim/settings.json --session-id ${token} --session-id different`,
 };
 
 it.each(modes)("selector and ordinary transport: %s", async (mode) => {
@@ -55,7 +57,7 @@ it.each(modes)("selector and ordinary transport: %s", async (mode) => {
           executableName: "sh", command: "/bin/sh /fixture/launch", startedAt },
         { pid: 102, ppid: 101, pgid: mode === "background" ? 999 : 101, tpgid: 101,
           executableName: ["versioned", "versioned-comm-only", "other-semver", "versioned-direct-pane"].includes(mode) ? "2.1.285" : "claude",
-          command: `${executable} --permission-mode auto ${mode === "missing-token" ? "" : `--session-id ${mode.startsWith("wrong-token") ? "different" : token}`} --name ${name}`, startedAt },
+          command: `${executable} --permission-mode auto ${mode === "settings-single" ? "--settings /fixture/settings.json " : ""}${mode === "missing-token" ? "" : `--session-id ${mode.startsWith("wrong-token") || mode === "launcher-shim-shims-differ" ? "different" : token}`} --name ${name}`, startedAt },
       ]),
     ];
     // The shell still owns the terminal; these children are in background groups.
@@ -69,7 +71,7 @@ it.each(modes)("selector and ordinary transport: %s", async (mode) => {
     if (mode.startsWith("launcher-shim")) {
       rows.push(
         { ...rows[2]!, pid: 104, ppid: 102,
-          command: `/shim/bin/claude --permission-mode auto --session-id ${mode === "launcher-shim-mixed-token" ? "different" : token} --name ${name}` },
+          command: `/shim/bin/claude --permission-mode auto --session-id ${["launcher-shim-mixed-token", "launcher-shim-shims-differ"].includes(mode) ? "different" : token} --name ${name}` },
         { ...rows[2]!, pid: 105, ppid: mode === "launcher-shim-siblings" ? 102 : 104, command: `/shim/claude ${shimChild[mode] ?? "--settings /shim/settings.json"} --permission-mode auto` },
       );
     }
@@ -119,6 +121,7 @@ it.each(modes)("selector and ordinary transport: %s", async (mode) => {
       "missing-token", "unavailable", "background", "other-semver", "missing-metadata",
       "versioned-argv-only", "versioned-comm-only", "launcher-shim",
       "launcher-shim-match", "launcher-shim-match-after", "launcher-shim-child-unparsed",
+      "launcher-shim-child-two-sessions", "settings-single",
     ].includes(mode);
     if (bare) expect({ ok: sent.ok, calls }).toEqual({ ok: false, calls: [] });
     expect(sent.ok).toBe(expectedSend);
@@ -128,11 +131,14 @@ it.each(modes)("selector and ordinary transport: %s", async (mode) => {
       "npm-name", "versioned", "pane-command-unavailable", "versioned-direct-pane", "missing-metadata",
       "ambiguous-pane", "changed-binding", "onboarding", "changed-after-paste",
     ].includes(mode));
-    if (expectedSend && ["unavailable", "unknown-both", "missing-token", "missing-metadata", "background", "other-semver", "versioned-argv-only", "versioned-comm-only", "launcher-shim", "launcher-shim-child-unparsed"].includes(mode)) {
+    if (expectedSend && ["unavailable", "unknown-both", "missing-token", "missing-metadata", "background", "other-semver", "versioned-argv-only", "versioned-comm-only", "launcher-shim", "launcher-shim-child-unparsed", "launcher-shim-child-two-sessions"].includes(mode)) {
       expect(sent.warning).toContain("without verified native identity");
     }
     // A shim's token is not inherited: only the real process's own argv verifies.
-    if (mode.startsWith("launcher-shim-match")) expect(sent.warning ?? "").not.toContain("without verified native identity");
+    // Shims alone can still prove a mismatch.
+    if (mode === "launcher-shim-shims-differ") expect(sent.error).toContain("names a different Claude conversation");
+    // --settings is delivery-only: the strict selector above still rejects it (observation === null).
+    if (mode.startsWith("launcher-shim-match") || mode === "settings-single") expect(sent.warning ?? "").not.toContain("without verified native identity");
     if (mode.startsWith("launcher-shim-child-differs")) expect(sent.error).toContain("name different conversations");
     if (mode === "launcher-shim-mixed-token") expect(sent.error).toContain("name different conversations");
     // Two children of one shim are two runtimes, not a chain.
