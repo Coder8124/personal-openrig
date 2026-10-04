@@ -23,6 +23,14 @@ export interface UseActivityFeedResult {
   setFeedOpen: (open: boolean) => void;
 }
 
+// The daemon stamps events with SQLite's datetime('now'): UTC, written as
+// "YYYY-MM-DD HH:MM:SS" with no zone, which Date would read as local time.
+const SQLITE_UTC_TIMESTAMP = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?$/;
+
+function sqliteUtcToIso(value: string): string {
+  return SQLITE_UTC_TIMESTAMP.test(value) ? `${value.replace(" ", "T")}Z` : value;
+}
+
 export function useActivityFeed(): UseActivityFeedResult {
   const queryClient = useQueryClient();
   const [events, setEvents] = useState<ActivityEvent[]>([]);
@@ -34,7 +42,7 @@ export function useActivityFeed(): UseActivityFeedResult {
       seq: typeof parsed["seq"] === "number" ? parsed["seq"] : Date.now(),
       type: (parsed["type"] as string) ?? "unknown",
       payload: parsed,
-      createdAt: (parsed["createdAt"] as string) ?? new Date().toISOString(),
+      createdAt: sqliteUtcToIso((parsed["createdAt"] as string) ?? new Date().toISOString()),
       receivedAt: Date.now(),
     };
     setEvents((prev) => [event, ...prev].slice(0, MAX_ACTIVITY_EVENTS));

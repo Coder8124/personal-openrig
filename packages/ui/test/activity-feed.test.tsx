@@ -99,6 +99,11 @@ function ReplayHarness({ testId }: { testId: string }) {
   return <span data-testid={testId}>{events.map((event) => event.type).join(",")}</span>;
 }
 
+function CreatedAtHarness() {
+  const { events } = useActivityFeed();
+  return <span data-testid="created-at">{events.map((event) => event.createdAt).join(",")}</span>;
+}
+
 function renderHookHarness() {
   const queryClient = createTestQueryClient();
   return render(
@@ -381,6 +386,25 @@ describe("Activity Feed", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("late-feed").textContent).toContain("queue.created");
+    });
+  });
+
+  it("reads the daemon's SQLite event timestamp as UTC", async () => {
+    const queryClient = createTestQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <CreatedAtHarness />
+      </QueryClientProvider>
+    );
+
+    await waitFor(() => expect(instances).toHaveLength(1));
+    act(() => {
+      getLastInstance().simulateMessage(JSON.stringify({ type: "rig.created", rigId: "r1", seq: 1, createdAt: "2026-04-01 16:48:20" }));
+      getLastInstance().simulateMessage(JSON.stringify({ type: "rig.created", rigId: "r2", seq: 2, createdAt: "2026-04-01T16:48:20.000Z" }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("created-at").textContent).toBe("2026-04-01T16:48:20.000Z,2026-04-01T16:48:20Z");
     });
   });
 
