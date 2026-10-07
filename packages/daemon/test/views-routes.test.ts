@@ -13,6 +13,7 @@ import { QueueRepository } from "../src/domain/queue-repository.js";
 import { ViewProjector } from "../src/domain/view-projector.js";
 import { wireViewEventBridge } from "../src/domain/view-event-bridge.js";
 import { viewsRoutes } from "../src/routes/views.js";
+import { expectLimitParsing } from "./helpers/limit-query-cases.js";
 
 function buildApp(opts: {
   eventBus: EventBus;
@@ -86,6 +87,11 @@ describe("views routes (PL-004 Phase B)", () => {
     expect(res.status).toBe(404);
     const err = (await res.json()) as { error: string };
     expect(err.error).toBe("view_not_found");
+  });
+
+  it("GET /api/views/:viewName refuses only a non-numeric limit (#586)", async () => {
+    // The projector clamps the limit to 1-1000, so large values keep working here.
+    await expectLimitParsing(app, "/api/views/recently-active", { boundIntoSql: false });
   });
 
   it("GET /api/views/recently-active?limit=1 honors limit query", async () => {

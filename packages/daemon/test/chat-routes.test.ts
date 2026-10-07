@@ -12,6 +12,7 @@ import { RigRepository } from "../src/domain/rig-repository.js";
 import { ChatRepository } from "../src/domain/chat-repository.js";
 import { EventBus } from "../src/domain/event-bus.js";
 import { chatRoutes } from "../src/routes/chat.js";
+import { expectLimitParsing } from "./helpers/limit-query-cases.js";
 
 function setupDb(): Database.Database {
   const db = createDb();
@@ -183,6 +184,11 @@ describe("chat routes", () => {
     expect(data).toHaveLength(2);
     expect(data[0].body).toBe("msg1");
     expect(data[1].body).toBe("msg2");
+  });
+
+  it("GET /history refuses only a non-numeric or unbindable limit (#586)", async () => {
+    for (const body of ["one", "two", "three"]) chatRepo.send(rigId, "alice", body);
+    await expectLimitParsing(app, `/api/rigs/${rigId}/chat/history`);
   });
 
   it("GET /history?topic=X filters", async () => {
