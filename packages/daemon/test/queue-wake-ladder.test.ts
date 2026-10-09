@@ -418,6 +418,82 @@ describe("S01 wake-or-escalate — retry ladder, named rungs, derived suspension
     expect(calls.some((c) => c.target === "worker@r")).toBe(false); // never escalated INTO the dead seat
   });
 
+  // #811 — queue.wake_human_rung: "explicit-only" keeps agent-to-agent escalations
+  // out of a person's channel; the default posts exactly as before.
+  async function exhaustToSelfSkip(): Promise<QueueItem> {
+    const baton = await mkBaton();
+    setNudgeResult(baton.qitemId, "failed:tmux session not found", 120);
+    for (let a = 1; a <= 3; a++) {
+      repo.transitionLog.append({
+        qitemId: baton.qitemId,
+        state: "pending",
+        actorSession: "wake-ladder@system",
+        transitionNote: `${LADDER_ATTEMPT_PREFIX} ${a}/3 outcome=failed:tmux session not found`,
+      });
+    }
+    ageMarkers(baton.qitemId, 30);
+    return baton;
+  }
+  function recordingEngine(posted: string[]) {
+    return {
+      dispatchEscalation: async (row: QueueItem) => {
+        posted.push(row.qitemId);
+        return { decision: "post", resolved: true, dispatched: true };
+      },
+    };
+  }
+
+  it("HUMAN RUNG DEFAULT: with the engine wired and no setting, the operator rung posts the escalation as before", async () => {
+    const baton = await exhaustToSelfSkip();
+    const posted: string[] = [];
+    await tick({ resolveOrchestrator: () => null, deliveryEngine: recordingEngine(posted) });
+    expect(posted).toEqual([baton.qitemId]);
+    expect(markersOf(baton.qitemId, LADDER_RUNG_PREFIX).some((r) => /dispatched-to-engine/.test(r))).toBe(true);
+  });
+
+  it("HUMAN RUNG EXPLICIT-ONLY: an agent-to-agent baton ends at the escalation row and nothing is posted to a person", async () => {
+    const baton = await exhaustToSelfSkip();
+    const posted: string[] = [];
+    await tick({ resolveOrchestrator: () => null, deliveryEngine: recordingEngine(posted), humanRung: "explicit-only" });
+    expect(posted).toEqual([]);
+    const rungs = markersOf(baton.qitemId, LADDER_RUNG_PREFIX);
+    expect(rungs.some((r) => /operator floor=escalation view \(human rung explicit-only/.test(r))).toBe(true);
+    expect(markersOf(baton.qitemId, LADDER_EXHAUSTED_PREFIX)).toHaveLength(1);
+    const escRows = await escalationRowsFor("worker@r");
+    expect(escRows).toHaveLength(1);
+    expect(escRows[0]!.state).toBe("pending");
+    ageMarkers(baton.qitemId, 30);
+    await tick({ resolveOrchestrator: () => null, deliveryEngine: recordingEngine(posted), humanRung: "explicit-only" });
+    expect(posted).toEqual([]); // exhausted: never posts later either
+  });
+
+  it("HUMAN RUNG EXPLICIT-ONLY: after a failed orchestrator rung, the operator rung still posts nothing", async () => {
+    const baton = await exhaustToSelfSkip();
+    const posted: string[] = [];
+    outcomes["orch@r"] = "failed:tmux session not found";
+    await tick({ deliveryEngine: recordingEngine(posted), humanRung: "explicit-only" });
+    ageMarkers(baton.qitemId, 30);
+    await tick({ deliveryEngine: recordingEngine(posted), humanRung: "explicit-only" });
+    expect(posted).toEqual([]);
+    expect(markersOf(baton.qitemId, LADDER_RUNG_PREFIX)[1]).toMatch(/human rung explicit-only/);
+    expect(markersOf(baton.qitemId, LADDER_EXHAUSTED_PREFIX)).toHaveLength(1);
+  });
+
+  it("HUMAN RUNG SETTING: defaults to always; explicit-only resolves from the env; other values are refused", async () => {
+    const mod = await ladderMod();
+    const missingConfig = `/tmp/openrig-811-missing-${process.pid}-${Date.now()}.json`;
+    const store = new SettingsStore(missingConfig);
+    expect(store.resolveOne("queue.wake_human_rung" as never)).toMatchObject({ value: "always", source: "default" });
+    expect(mod.DEFAULT_WAKE_HUMAN_RUNG).toBe("always");
+    process.env.OPENRIG_QUEUE_WAKE_HUMAN_RUNG = "explicit-only";
+    try {
+      expect(store.resolveOne("queue.wake_human_rung" as never)).toMatchObject({ value: "explicit-only", source: "env" });
+      expect(() => store.set("queue.wake_human_rung" as never, "never")).toThrow(/always.*explicit-only/);
+    } finally {
+      delete process.env.OPENRIG_QUEUE_WAKE_HUMAN_RUNG;
+    }
+  });
+
   // ── G7: F5 — THE S02 SEAM HOLDS ──────────────────────────────────────────────
 
   it("SEAM (live ladder): a baton under a live ladder produces ZERO S02 undelivered findings", async () => {
