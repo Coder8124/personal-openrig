@@ -122,6 +122,25 @@ describe("QueueRepository", () => {
     expect(captured.some((e) => e.type === "queue.claimed")).toBe(true);
   });
 
+  it("claim resolves an unconfirmed nudge result to claimed and keeps definite ones (#165)", async () => {
+    const results: Array<[string, string]> = [
+      ["delivered-ack-pending", "claimed"],
+      ["indeterminate:send timed out", "claimed"],
+      ["verified", "verified"],
+      ["failed:Session 'bob@rig' not found", "failed:Session 'bob@rig' not found"],
+      ["retained:typing_guard", "retained:typing_guard"],
+    ];
+    for (const [recorded, expected] of results) {
+      const item = await repo.create({ sourceSession: "alice@rig", destinationSession: "bob@rig", body: recorded });
+      repo.recordNudgeAttempt(item.qitemId, recorded);
+      const claimed = repo.claim({ qitemId: item.qitemId, destinationSession: "bob@rig" });
+      expect(claimed.lastNudgeResult).toBe(expected);
+    }
+    const unnudged = await repo.create({ sourceSession: "alice@rig", destinationSession: "bob@rig", body: "x" });
+    db.prepare("UPDATE queue_items SET last_nudge_result = NULL WHERE qitem_id = ?").run(unnudged.qitemId);
+    expect(repo.claim({ qitemId: unnudged.qitemId, destinationSession: "bob@rig" }).lastNudgeResult).toBeNull();
+  });
+
   it("claim rejects mismatched destination", async () => {
     const item = await repo.create({
       sourceSession: "alice@rig",

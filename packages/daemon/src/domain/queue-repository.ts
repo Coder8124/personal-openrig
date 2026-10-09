@@ -116,6 +116,17 @@ export function isTypedGateBlocker(value: unknown): boolean {
  * Each class is a POSITIVE match — there is no default class. DR-2 (retry) stays HELD at n=1; this is
  * READ-side labeling only, making the strand's nature legible (addressing-fix vs retry vs triage-the-unknown).
  */
+/**
+ * #165: a claim is the destination acting on the row, which is stronger evidence
+ * than the wake send could get. An unconfirmed wire result (`delivered-ack-pending`
+ * or `indeterminate:*`) resolves to `claimed` so readers can tell "delivered and
+ * acted on" from "delivered, unknown". Verified, failed, retained and
+ * gateway-owned results are left as recorded.
+ */
+const CLAIM_RESOLVES_NUDGE_SQL = `last_nudge_result = CASE
+                     WHEN last_nudge_result = 'delivered-ack-pending' OR last_nudge_result LIKE 'indeterminate:%'
+                     THEN 'claimed' ELSE last_nudge_result END`;
+
 export function classifyNudgeFailure(lastNudgeResult: string | null | undefined): "permanent-topology" | "transient" | "unknown" | null {
   if (typeof lastNudgeResult !== "string" || !lastNudgeResult.startsWith("failed:")) return null;
   // permanent-topology: local-registry "not found" — the destination is not resolvable on THIS daemon.
@@ -2230,7 +2241,7 @@ export class QueueRepository {
           .prepare(
             `UPDATE queue_items
                SET state = 'in-progress', ts_updated = ?, claimed_at = ?, closure_required_at = ?,
-                   claimed_by_generation_uuid = ?, blocked_on = NULL
+                   claimed_by_generation_uuid = ?, blocked_on = NULL, ${CLAIM_RESOLVES_NUDGE_SQL}
              WHERE qitem_id = ?`
           )
           .run(ts, ts, closureRequiredAt, claimedByGeneration, input.qitemId);
@@ -2238,7 +2249,8 @@ export class QueueRepository {
         this.db
           .prepare(
             `UPDATE queue_items
-               SET state = 'in-progress', ts_updated = ?, claimed_at = ?, closure_required_at = ?, blocked_on = NULL
+               SET state = 'in-progress', ts_updated = ?, claimed_at = ?, closure_required_at = ?, blocked_on = NULL,
+                   ${CLAIM_RESOLVES_NUDGE_SQL}
              WHERE qitem_id = ?`
           )
           .run(ts, ts, closureRequiredAt, input.qitemId);
