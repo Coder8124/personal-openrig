@@ -113,8 +113,9 @@ export function viewsRoutes(): Hono {
   app.get("/:viewName", async (c) => {
     const viewName = c.req.param("viewName");
     const rig = c.req.query("rig") || undefined;
-    // The projector clamps the limit to 1-1000 itself, so only NaN fails here.
-    const parsed = queryLimit(c, { boundIntoSql: false });
+    // The projector clamps the limit to 1-1000 itself, so only NaN fails, and
+    // only on a view that binds it.
+    const parsed = queryLimit(c, { boundIntoSql: false, used: getProjector(c).bindsLimit(viewName) });
     if (!parsed.ok) return parsed.response;
     const limit = parsed.limit;
     // S27 — the execution view scopes by mission (release-scoped default derived

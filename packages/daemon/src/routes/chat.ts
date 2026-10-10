@@ -64,10 +64,6 @@ export function chatRoutes(): Hono {
     const after = c.req.query("after");
     const since = c.req.query("since");
     const sender = c.req.query("sender");
-    const parsed = queryLimit(c);
-    if (!parsed.ok) return parsed.response;
-    const limit = parsed.limit;
-
     const chatRepo = getChatRepo(c);
     // An unparseable since silently matches no rows (julianday returns NULL),
     // which reads as an empty room — refuse it instead. An empty value is not a
@@ -75,6 +71,11 @@ export function chatRoutes(): Hono {
     if (since && !chatRepo.timestampParses(since)) {
       return c.json({ error: `since must be a datetime SQLite can parse, such as 'YYYY-MM-DD HH:MM:SS'; got '${escapeControlChars(since)}'` }, 400);
     }
+    // A topic that hasn't started answers [] before the limit is used.
+    const parsed = queryLimit(c, { used: !topic || chatRepo.topicStarted(rigId, topic) });
+    if (!parsed.ok) return parsed.response;
+    const limit = parsed.limit;
+
     const messages = chatRepo.history(rigId, { topic, limit, after, since, sender });
 
     return c.json(messages);

@@ -191,6 +191,15 @@ describe("chat routes", () => {
     await expectLimitParsing(app, `/api/rigs/${rigId}/chat/history`);
   });
 
+  it("GET /history?topic= keeps answering [] for a topic that hasn't started, whatever the limit (#586)", async () => {
+    chatRepo.send(rigId, "alice", "no topic yet");
+    const res = await app.request(`/api/rigs/${rigId}/chat/history?topic=later&limit=abc`);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual([]);
+    chatRepo.sendTopic(rigId, "alice", "later");
+    expect((await app.request(`/api/rigs/${rigId}/chat/history?topic=later&limit=abc`)).status).toBe(400);
+  });
+
   it("GET /history?topic=X filters", async () => {
     chatRepo.send(rigId, "alice", "before topic");
     chatRepo.sendTopic(rigId, "alice", "deploy");
