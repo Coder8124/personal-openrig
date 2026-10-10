@@ -443,7 +443,8 @@ export const VALID_KEYS = [
   "queue.wake_unconfirmed_window_minutes",
   "queue.wake_swap_grace_seconds",
   // #811 — whether the operator rung posts agent-to-agent escalations to a person.
-  // Under explicit-only, an ask that needs a person must be addressed to the person.
+  // Under explicit-only, an ask that needs a person must be addressed to the person;
+  // without a human registry, explicit-only posts everything, as always does.
   "queue.wake_human_rung",
 ] as const;
 

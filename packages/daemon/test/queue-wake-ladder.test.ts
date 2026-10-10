@@ -492,6 +492,14 @@ describe("S01 wake-or-escalate — retry ladder, named rungs, derived suspension
     expect(markersOf(baton.qitemId, LADDER_RUNG_PREFIX).some((r) => /human rung explicit-only/.test(r))).toBe(false);
   });
 
+  it("HUMAN RUNG EXPLICIT-ONLY: a handoff to a one-off @external address the registry does not know still posts", async () => {
+    const baton = await exhaustToSelfSkip("slack:U012AB3CD@external");
+    const posted: string[] = [];
+    await tick({ resolveOrchestrator: () => null, deliveryEngine: recordingEngine(posted), humanRung: "explicit-only", loadHumanRegistry: founderRegistry });
+    expect(posted).toEqual([baton.qitemId]);
+    expect(markersOf(baton.qitemId, LADDER_RUNG_PREFIX).some((r) => /human rung explicit-only/.test(r))).toBe(false);
+  });
+
   it("HUMAN RUNG EXPLICIT-ONLY: a person-shaped address the registry does not know is agent-to-agent", async () => {
     const baton = await exhaustToSelfSkip("human-stranger@r");
     const posted: string[] = [];

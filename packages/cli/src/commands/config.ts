@@ -95,7 +95,8 @@ Keys:
                          wake_retry_interval_seconds, wake_retry_cap, wake_unconfirmed_window_minutes,
                          wake_swap_grace_seconds (S01 wake-or-escalate ladder),
                          wake_human_rung (always | explicit-only — post agent-to-agent escalations to a person;
-                           under explicit-only, an ask that needs a person must be addressed to the person)
+                           under explicit-only, an ask that needs a person must be addressed to the person;
+                           without a human registry, explicit-only posts everything, as always does)
   retention.*            enabled, transitions_days, watchdog_days,
                          watchdog_keep_per_job, batch_size
   launch.non_interruptive  accept harness first-launch warnings at full bypass for new rigs (default off)

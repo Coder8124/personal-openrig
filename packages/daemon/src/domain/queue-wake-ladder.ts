@@ -56,6 +56,7 @@ import {
 } from "./queue-wake-repository.js";
 import { SettingsStore } from "./user-settings/settings-store.js";
 import { loadHumanRegistry, resolveRegisteredHumanAddress, type LoadResult } from "./gateway/human-registry.js";
+import { parseSessionName } from "./session-name.js";
 import {
   LADDER_ATTEMPT_PREFIX,
   LADDER_RUNG_PREFIX,
@@ -74,9 +75,11 @@ export const WAKE_SWAP_GRACE_KEY = "queue.wake_swap_grace_seconds";
 export const DEFAULT_WAKE_SWAP_GRACE_SECONDS = 180;
 /** Whether the operator rung posts agent-to-agent escalations to a person.
  *  "always" (default) keeps today's behavior; "explicit-only" ends the ladder at
- *  the escalation row (operator seat or rig lead) unless the human registry
- *  resolves the row's destination to a person. An ask that needs a person must be
- *  addressed to the person. */
+ *  the escalation row (operator seat or rig lead) unless the row's destination is
+ *  a person: any `@external` address, or one the human registry resolves to a
+ *  person. An ask that needs a person must be addressed to the person. An instance
+ *  that has never set up the human registry can't read it, so there explicit-only
+ *  posts everything, as "always" does. */
 export const WAKE_HUMAN_RUNG_KEY = "queue.wake_human_rung";
 export type WakeHumanRung = "always" | "explicit-only";
 export const DEFAULT_WAKE_HUMAN_RUNG: WakeHumanRung = "always";
@@ -1109,11 +1112,14 @@ async function advancePromptRefusals(
   }
 }
 
-/** Whether a destination is a person, decided by the human registry as the gateway
- *  destination resolver decides it (an `@external` address or a canonical alias such as
- *  human-founder@kernel), never by the address's shape. An unreadable registry is not
- *  evidence that no person was addressed, so the rung posts as it would by default. */
-function addressedToRegisteredPerson(deps: WakeLadderDeps, destination: string): boolean {
+/** Whether a destination is a person, decided as the gateway destination resolver
+ *  decides it: every `@external` address is person-facing, registered or not (a one-off
+ *  such as slack:U012AB3CD@external is never in the registry), and any other address is
+ *  a person only when the human registry resolves it (a canonical alias such as
+ *  human-founder@kernel), never by its shape. An unreadable registry is not evidence
+ *  that no person was addressed, so the rung posts as it would by default. */
+function addressedToPerson(deps: WakeLadderDeps, destination: string): boolean {
+  if (parseSessionName(destination).kind === "external") return true;
   const registry = (deps.loadHumanRegistry ?? (() => loadHumanRegistry()))();
   if (!registry.ok) return true;
   return resolveRegisteredHumanAddress(destination, registry.entities) !== null;
@@ -1148,7 +1154,7 @@ async function operatorRung(
     humanRungSettingApplies &&
     !view.opEngineDispatched &&
     (deps.humanRung ?? resolveWakeHumanRung()) === "explicit-only" &&
-    !addressedToRegisteredPerson(deps, row.destinationSession)
+    !addressedToPerson(deps, row.destinationSession)
   ) {
     // Agent-to-agent work: the escalation row stays the visible object for the
     // operator seat or rig lead, and nothing is posted to a person.
