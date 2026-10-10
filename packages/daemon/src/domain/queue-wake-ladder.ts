@@ -55,7 +55,7 @@ import {
   USAGE_LIMIT_POOL_TAG_PREFIX,
 } from "./queue-wake-repository.js";
 import { SettingsStore } from "./user-settings/settings-store.js";
-import { isHumanSeatSessionRef } from "./session-name.js";
+import { loadHumanRegistry, resolveRegisteredHumanAddress, type LoadResult } from "./gateway/human-registry.js";
 import {
   LADDER_ATTEMPT_PREFIX,
   LADDER_RUNG_PREFIX,
@@ -74,8 +74,9 @@ export const WAKE_SWAP_GRACE_KEY = "queue.wake_swap_grace_seconds";
 export const DEFAULT_WAKE_SWAP_GRACE_SECONDS = 180;
 /** Whether the operator rung posts agent-to-agent escalations to a person.
  *  "always" (default) keeps today's behavior; "explicit-only" ends the ladder at
- *  the escalation row (operator seat or rig lead) unless the row is addressed to
- *  a person. */
+ *  the escalation row (operator seat or rig lead) unless the human registry
+ *  resolves the row's destination to a person. An ask that needs a person must be
+ *  addressed to the person. */
 export const WAKE_HUMAN_RUNG_KEY = "queue.wake_human_rung";
 export type WakeHumanRung = "always" | "explicit-only";
 export const DEFAULT_WAKE_HUMAN_RUNG: WakeHumanRung = "always";
@@ -213,6 +214,9 @@ export interface WakeLadderDeps {
   deliveryEngine?: OperatorDeliveryEngine;
   /** Defaults to the queue.wake_human_rung setting. */
   humanRung?: WakeHumanRung;
+  /** The human registry the explicit-only rung uses to tell a handoff addressed to a
+   *  person from agent-to-agent work. Defaults to the daemon's registry. */
+  loadHumanRegistry?: () => LoadResult;
 }
 
 export interface WakeLadderAction {
@@ -1105,6 +1109,16 @@ async function advancePromptRefusals(
   }
 }
 
+/** Whether a destination is a person, decided by the human registry as the gateway
+ *  destination resolver decides it (an `@external` address or a canonical alias such as
+ *  human-founder@kernel), never by the address's shape. An unreadable registry is not
+ *  evidence that no person was addressed, so the rung posts as it would by default. */
+function addressedToRegisteredPerson(deps: WakeLadderDeps, destination: string): boolean {
+  const registry = (deps.loadHumanRegistry ?? (() => loadHumanRegistry()))();
+  if (!registry.ok) return true;
+  return resolveRegisteredHumanAddress(destination, registry.entities) !== null;
+}
+
 /** The operator rung (OPR.0.5.6.1 A1.2/AM-F3): the delivery rules engine IS the rung's
  *  delivery leg. With an engine port wired, the rung dispatches exactly once per episode,
  *  records the decision, and exhausts ONLY when the outcome resolves (synchronously, or
@@ -1134,7 +1148,7 @@ async function operatorRung(
     humanRungSettingApplies &&
     !view.opEngineDispatched &&
     (deps.humanRung ?? resolveWakeHumanRung()) === "explicit-only" &&
-    !isHumanSeatSessionRef(row.destinationSession)
+    !addressedToRegisteredPerson(deps, row.destinationSession)
   ) {
     // Agent-to-agent work: the escalation row stays the visible object for the
     // operator seat or rig lead, and nothing is posted to a person.

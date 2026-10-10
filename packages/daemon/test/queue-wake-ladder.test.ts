@@ -420,8 +420,8 @@ describe("S01 wake-or-escalate — retry ladder, named rungs, derived suspension
 
   // #811 — queue.wake_human_rung: "explicit-only" keeps agent-to-agent escalations
   // out of a person's channel; the default posts exactly as before.
-  async function exhaustToSelfSkip(): Promise<QueueItem> {
-    const baton = await mkBaton();
+  async function exhaustToSelfSkip(dest = "worker@r"): Promise<QueueItem> {
+    const baton = await mkBaton(dest);
     setNudgeResult(baton.qitemId, "failed:tmux session not found", 120);
     for (let a = 1; a <= 3; a++) {
       repo.transitionLog.append({
@@ -443,6 +443,11 @@ describe("S01 wake-or-escalate — retry ladder, named rungs, derived suspension
     };
   }
 
+  const founderRegistry = () => ({ ok: true as const, entities: [{
+    entityId: "human-founder", class: "human" as const, displayName: "Founder", address: "human-founder@external",
+    connectorBindings: [], prefs: { deliveryClass: "B" as const, availability: "available" as const },
+  }] });
+
   it("HUMAN RUNG DEFAULT: with the engine wired and no setting, the operator rung posts the escalation as before", async () => {
     const baton = await exhaustToSelfSkip();
     const posted: string[] = [];
@@ -454,7 +459,7 @@ describe("S01 wake-or-escalate — retry ladder, named rungs, derived suspension
   it("HUMAN RUNG EXPLICIT-ONLY: an agent-to-agent baton ends at the escalation row and nothing is posted to a person", async () => {
     const baton = await exhaustToSelfSkip();
     const posted: string[] = [];
-    await tick({ resolveOrchestrator: () => null, deliveryEngine: recordingEngine(posted), humanRung: "explicit-only" });
+    await tick({ resolveOrchestrator: () => null, deliveryEngine: recordingEngine(posted), humanRung: "explicit-only", loadHumanRegistry: founderRegistry });
     expect(posted).toEqual([]);
     const rungs = markersOf(baton.qitemId, LADDER_RUNG_PREFIX);
     expect(rungs.some((r) => /operator floor=escalation view \(human rung explicit-only/.test(r))).toBe(true);
@@ -463,7 +468,7 @@ describe("S01 wake-or-escalate — retry ladder, named rungs, derived suspension
     expect(escRows).toHaveLength(1);
     expect(escRows[0]!.state).toBe("pending");
     ageMarkers(baton.qitemId, 30);
-    await tick({ resolveOrchestrator: () => null, deliveryEngine: recordingEngine(posted), humanRung: "explicit-only" });
+    await tick({ resolveOrchestrator: () => null, deliveryEngine: recordingEngine(posted), humanRung: "explicit-only", loadHumanRegistry: founderRegistry });
     expect(posted).toEqual([]); // exhausted: never posts later either
   });
 
@@ -471,12 +476,36 @@ describe("S01 wake-or-escalate — retry ladder, named rungs, derived suspension
     const baton = await exhaustToSelfSkip();
     const posted: string[] = [];
     outcomes["orch@r"] = "failed:tmux session not found";
-    await tick({ deliveryEngine: recordingEngine(posted), humanRung: "explicit-only" });
+    await tick({ deliveryEngine: recordingEngine(posted), humanRung: "explicit-only", loadHumanRegistry: founderRegistry });
     ageMarkers(baton.qitemId, 30);
-    await tick({ deliveryEngine: recordingEngine(posted), humanRung: "explicit-only" });
+    await tick({ deliveryEngine: recordingEngine(posted), humanRung: "explicit-only", loadHumanRegistry: founderRegistry });
     expect(posted).toEqual([]);
     expect(markersOf(baton.qitemId, LADDER_RUNG_PREFIX)[1]).toMatch(/human rung explicit-only/);
     expect(markersOf(baton.qitemId, LADDER_EXHAUSTED_PREFIX)).toHaveLength(1);
+  });
+
+  it("HUMAN RUNG EXPLICIT-ONLY: a handoff to a registry alias of a person still posts to that person", async () => {
+    const baton = await exhaustToSelfSkip("human-founder@r");
+    const posted: string[] = [];
+    await tick({ resolveOrchestrator: () => null, deliveryEngine: recordingEngine(posted), humanRung: "explicit-only", loadHumanRegistry: founderRegistry });
+    expect(posted).toEqual([baton.qitemId]);
+    expect(markersOf(baton.qitemId, LADDER_RUNG_PREFIX).some((r) => /human rung explicit-only/.test(r))).toBe(false);
+  });
+
+  it("HUMAN RUNG EXPLICIT-ONLY: a person-shaped address the registry does not know is agent-to-agent", async () => {
+    const baton = await exhaustToSelfSkip("human-stranger@r");
+    const posted: string[] = [];
+    await tick({ resolveOrchestrator: () => null, deliveryEngine: recordingEngine(posted), humanRung: "explicit-only", loadHumanRegistry: founderRegistry });
+    expect(posted).toEqual([]);
+    expect(markersOf(baton.qitemId, LADDER_RUNG_PREFIX).some((r) => /human rung explicit-only/.test(r))).toBe(true);
+  });
+
+  it("HUMAN RUNG EXPLICIT-ONLY: an unreadable registry is not evidence of agent-to-agent work, so the rung posts", async () => {
+    const baton = await exhaustToSelfSkip();
+    const posted: string[] = [];
+    await tick({ resolveOrchestrator: () => null, deliveryEngine: recordingEngine(posted), humanRung: "explicit-only",
+      loadHumanRegistry: () => ({ ok: false as const, error: "registry projection missing" }) });
+    expect(posted).toEqual([baton.qitemId]);
   });
 
   it("HUMAN RUNG SETTING: defaults to always; explicit-only resolves from the env; other values are refused", async () => {
