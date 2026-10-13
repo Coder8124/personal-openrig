@@ -215,6 +215,10 @@ Exit codes:
     }
 
     const result = res.data;
+    // The daemon answers rig: null only when the rig name matched no rig or
+    // more than one. Exit 1 like rig send/transcript/release do for a missing
+    // target, so a script or agent can tell a mistyped rig from "no matches".
+    if (!result.rig) process.exitCode = 1;
 
     if (opts.json) {
       console.log(JSON.stringify(result));
