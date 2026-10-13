@@ -1222,15 +1222,21 @@ export class SessionTransport {
     };
     // #331: with mouse on, scrolling a seat pane puts it in tmux copy mode. A paste still reaches
     // the input there, but copy mode swallows the Enter, so the send would report ok while the
-    // text sits unsubmitted. Refuse before typing anything. An unknown answer keeps today's path.
-    const checkCopyMode = async (outcome: string): Promise<SendResult | null> => {
-      let inMode: boolean | null = null;
+    // text sits unsubmitted. Leave the mode once (send-keys -X cancel) and deliver; fail before
+    // typing anything only if the pane still reads as in a mode. An unknown answer keeps today's path.
+    const readPaneInMode = async (): Promise<boolean | null> => {
       try {
-        if (typeof this.tmuxAdapter.isPaneInMode === "function") inMode = await this.tmuxAdapter.isPaneInMode(sessionName);
-      } catch { inMode = null; }
-      if (inMode !== true) return null;
+        return typeof this.tmuxAdapter.isPaneInMode === "function" ? await this.tmuxAdapter.isPaneInMode(sessionName) : null;
+      } catch { return null; }
+    };
+    const leavePaneMode = async (outcome: string): Promise<SendResult | null> => {
+      if (await readPaneInMode() !== true) return null;
+      try {
+        if (typeof this.tmuxAdapter.cancelPaneMode === "function") await this.tmuxAdapter.cancelPaneMode(sessionName);
+      } catch { /* the re-read below decides */ }
+      if (await readPaneInMode() !== true) return null;
       return { ok: false, sessionName, sent: false, reason: "pane_in_mode",
-        error: `Refused: '${sessionName}' is in tmux copy mode (scrolled back), where Enter would not reach the agent. Press q or scroll to the bottom of the pane, then resend. ${outcome}` };
+        error: `'${sessionName}' is in a tmux mode (such as copy mode) and could not leave it, so Enter would not reach the agent. ${outcome}` };
     };
     // S01/S02 P2 observation context, frozen at attempt entry before any await.
     const observed = this.captureObserver ? {
@@ -1379,7 +1385,7 @@ export class SessionTransport {
       }
       const targetFailure = await checkClaudeTarget();
       if (targetFailure) return targetFailure;
-      const copyModeFailure = await checkCopyMode("Nothing was submitted.");
+      const copyModeFailure = await leavePaneMode("Nothing was submitted.");
       if (copyModeFailure) return copyModeFailure;
       const submitResult = await this.runStage(
         "session_transport.submit",
@@ -1528,7 +1534,7 @@ export class SessionTransport {
     // Recheck the selected recipient after readiness/capture awaits, at the input boundary.
     const targetFailure = await checkClaudeTarget();
     if (targetFailure) return observe(targetFailure);
-    const copyModeFailure = await checkCopyMode("No text was sent.");
+    const copyModeFailure = await leavePaneMode("No text was sent.");
     if (copyModeFailure) return observe({ ...copyModeFailure, ...(waitMode ? waitEvidence : {}) });
 
     // 3. Deliver ordinary messages as paste, audited prompt answers as key input.
