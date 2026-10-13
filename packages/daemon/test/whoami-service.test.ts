@@ -224,12 +224,28 @@ describe("WhoamiService", () => {
 
   it("#122: codex seat surfaces its captured thread id from the stored resume token", () => {
     const { nodeB, sessB } = seedRig();
-    db.prepare("UPDATE sessions SET resume_token = ?, resume_type = 'codex_id' WHERE id = ?").run("019a-codex-thread", sessB.id);
+    sessionRegistry.updateResumeToken(sessB.id, "codex_id", "019a-codex-thread");
     const result = svc.resolve({ nodeId: nodeB.id });
     expect(result!.runtimeContext?.runtime).toBe("codex");
     if (result!.runtimeContext?.runtime === "codex") {
       expect(result!.runtimeContext.threadId).toBe("019a-codex-thread");
       expect(result!.runtimeContext.conversationId).toBeNull();
+    }
+  });
+
+  it("#122: codex seat keeps threadId null for an unverified resume attempt or a failed probe", () => {
+    const { nodeB, sessB } = seedRig();
+    sessionRegistry.recordResumeAttempt(sessB.id, "codex_id", "019a-attempted");
+    const attempted = svc.resolve({ nodeId: nodeB.id });
+    expect(attempted!.runtimeContext?.runtime).toBe("codex");
+    if (attempted!.runtimeContext?.runtime === "codex") {
+      expect(attempted!.runtimeContext.threadId).toBeNull();
+    }
+
+    sessionRegistry.markResumeProbeResult(sessB.id, "not_resumable");
+    const failed = svc.resolve({ nodeId: nodeB.id });
+    if (failed!.runtimeContext?.runtime === "codex") {
+      expect(failed!.runtimeContext.threadId).toBeNull();
     }
   });
 

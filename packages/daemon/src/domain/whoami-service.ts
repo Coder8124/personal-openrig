@@ -373,10 +373,16 @@ export class WhoamiService {
     if (runtime === "codex") {
       // #122: launch captures the Codex thread id and stores it as the
       // session's resume token (resume_type codex_id), the same value the
-      // context monitor reads usage by. conversationId has no source yet.
+      // context monitor reads usage by. Only a verified token is a thread id:
+      // an attempted resume (recordResumeAttempt) or a failed probe keeps a
+      // token whose probe status is not 'resumable'. conversationId has no
+      // source yet.
+      const latest = this.latestResumeRow(nodeId);
       return {
         runtime: "codex",
-        threadId: this.latestResumeToken(nodeId),
+        threadId: latest?.resume_type === "codex_id" && latest.resume_last_probe_status === "resumable"
+          ? latest.resume_token
+          : null,
         conversationId: null,
         estimatedTokens,
         lastSampledAt,
@@ -385,7 +391,7 @@ export class WhoamiService {
     if (runtime === "claude-code") {
       return {
         runtime: "claude-code",
-        resumeToken: this.latestResumeToken(nodeId),
+        resumeToken: this.latestResumeRow(nodeId)?.resume_token ?? null,
         estimatedTokens,
         lastSampledAt,
       };
@@ -397,12 +403,12 @@ export class WhoamiService {
 
   /** resumeToken lives on sessions.resume_token (migration 006).
    *  Read the most-recent session for this node. */
-  private latestResumeToken(nodeId: string): string | null {
+  private latestResumeRow(nodeId: string): { resume_token: string | null; resume_type: string | null; resume_last_probe_status: string | null } | null {
     try {
       const row = this.db
-        .prepare("SELECT resume_token FROM sessions WHERE node_id = ? ORDER BY id DESC LIMIT 1")
-        .get(nodeId) as { resume_token: string | null } | undefined;
-      return row?.resume_token ?? null;
+        .prepare("SELECT resume_token, resume_type, resume_last_probe_status FROM sessions WHERE node_id = ? ORDER BY id DESC LIMIT 1")
+        .get(nodeId) as { resume_token: string | null; resume_type: string | null; resume_last_probe_status: string | null } | undefined;
+      return row ?? null;
     } catch {
       // Migration absent (test harness) — surface null honestly.
       return null;
