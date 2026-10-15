@@ -6,6 +6,7 @@ import { Hono } from "hono";
 import type { Database } from "better-sqlite3";
 import { queryUsageSeries, computeTopBurn, computeCostView } from "../domain/usage-series.js";
 import { readTelemetryPage, TelemetryInputError, type TelemetrySource, type TelemetryStream } from "../domain/finite-telemetry.js";
+import { timeBoundAdvisory } from "../domain/time-bound-advisory.js";
 
 export interface TelemetryRouteDeps {
   db: () => Database;
@@ -43,11 +44,6 @@ export function telemetryRoutes(deps: TelemetryRouteDeps): Hono {
     }
     // An unparseable bound would be compared to captured_at as text and
     // silently empty (or keep) the series, so refuse it like lane and limit.
-    for (const [name, value] of [["since", sinceIso], ["until", untilIso]] as const) {
-      if (value !== undefined && Number.isNaN(Date.parse(value))) {
-        return c.json({ error: `invalid ${name} "${value}" — must be an ISO date or time (e.g. 2026-10-14 or 2026-10-14T09:00:00Z)` }, 400);
-      }
-    }
     let limit: number | undefined;
     if (limitRaw !== undefined) {
       limit = Number(limitRaw);
@@ -62,7 +58,10 @@ export function telemetryRoutes(deps: TelemetryRouteDeps): Hono {
       untilIso,
       limit,
     });
-    return c.json({ rows });
+    // An unrecognised bound is compared as text against captured_at, as before; say so.
+    const advisories = [timeBoundAdvisory("since", sinceIso, "captured_at"), timeBoundAdvisory("until", untilIso, "captured_at")]
+      .filter((a): a is string => a !== undefined);
+    return c.json({ rows, ...(advisories.length > 0 ? { advisories } : {}) });
   });
 
   // OPR.0.7.0.2: what each seat's harness reports about cost, labelled; absent and stale stay visible.
