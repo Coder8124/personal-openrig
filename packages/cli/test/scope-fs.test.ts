@@ -274,6 +274,34 @@ describe("resolveMissionsRoot", () => {
     expect(fs.existsSync(path.join(path.dirname(project), "elsewhere"))).toBe(false);
   });
 
+  it("createMissing makes a declared missions.root even when missions/ already exists", () => {
+    const configuredRoot = mktemp();
+    const configuredMissions = path.join(configuredRoot, "missions");
+    fs.mkdirSync(configuredMissions);
+    const configPath = path.join(configuredRoot, "config.json");
+    fs.writeFileSync(configPath, JSON.stringify({ workspace: { slicesRoot: configuredMissions } }));
+    const project = mktemp();
+    fs.mkdirSync(path.join(project, "missions"));
+    fs.writeFileSync(path.join(project, "project.yaml"), "missions:\n  root: work/missions\n");
+    const declared = path.join(project, "work", "missions");
+
+    expect(resolveMissionsRoot({ override: project, configPath, strictOverride: true, createMissing: true })).toBe(declared);
+    expect(fs.statSync(declared).isDirectory()).toBe(true);
+  });
+
+  it("ignores missions.root: . even when --workspace ends in a slash", () => {
+    const configuredRoot = mktemp();
+    const configuredMissions = path.join(configuredRoot, "missions");
+    fs.mkdirSync(configuredMissions);
+    const configPath = path.join(configuredRoot, "config.json");
+    fs.writeFileSync(configPath, JSON.stringify({ workspace: { slicesRoot: configuredMissions } }));
+    const project = mktemp();
+    fs.writeFileSync(path.join(project, "project.yaml"), "missions:\n  root: .\n");
+
+    expect(resolveMissionsRoot({ override: `${project}${path.sep}`, configPath, strictOverride: true, createMissing: true }))
+      .toBe(path.join(project, "missions"));
+  });
+
   it("uses the typed workspace.slices_root setting instead of walking cwd", () => {
     const root = mktemp();
     const missions = path.join(root, "declared-missions");

@@ -223,7 +223,7 @@ function declaredMissionsRoot(workspace: string): string | null {
   const root = (missions as Record<string, unknown>)["root"];
   if (typeof root !== "string" || !root.trim() || path.isAbsolute(root) || root.split(/[\\/]/).includes("..")) return null;
   const resolved = path.resolve(workspace, root);
-  return resolved === workspace ? null : resolved;
+  return resolved === path.resolve(workspace) ? null : resolved;
 }
 
 /** Locate the missions root from an explicit workspace override or the typed
@@ -257,13 +257,19 @@ export function resolveMissionsRoot(opts: {
     const candidate = path.isAbsolute(fromOverride) ? fromOverride : path.resolve(cwd, fromOverride);
     const declared = declaredMissionsRoot(candidate);
     if (declared && fs.existsSync(declared) && fs.statSync(declared).isDirectory()) return declared;
+    const workspaceExists = fs.existsSync(candidate) && fs.statSync(candidate).isDirectory();
+    // A root project.yaml declares wins for a create even before it exists,
+    // not a missions/ directory that happens to be there.
+    if (opts.createMissing && declared && workspaceExists) {
+      fs.mkdirSync(declared, { recursive: true });
+      return declared;
+    }
     const missions = path.join(candidate, "missions");
     if (fs.existsSync(missions) && fs.statSync(missions).isDirectory()) return missions;
     if (path.basename(candidate) === "missions" && fs.existsSync(candidate)) return candidate;
-    if (opts.createMissing && fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
-      const created = declared ?? missions;
-      fs.mkdirSync(created, { recursive: true });
-      return created;
+    if (opts.createMissing && workspaceExists) {
+      fs.mkdirSync(missions, { recursive: true });
+      return missions;
     }
     if (opts.strictOverride) {
       const source = fromFlag === null ? "OPENRIG_WORK_ROOT" : "--workspace";
