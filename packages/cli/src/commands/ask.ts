@@ -112,7 +112,7 @@ Examples:
 
 Exit codes:
   0  Success
-  1  Daemon not running
+  1  Daemon not running, or the rig is unknown or ambiguous
   2  Failed to fetch data from daemon (or wake timed out)`);
 
   const getDeps = (): AskCommandDeps => (depsOverride as AskCommandDeps | undefined) ?? {
