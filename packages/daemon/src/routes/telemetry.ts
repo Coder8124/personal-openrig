@@ -41,6 +41,13 @@ export function telemetryRoutes(deps: TelemetryRouteDeps): Hono {
     if (lane && lane !== "context" && lane !== "provider_window") {
       return c.json({ error: `unknown lane "${lane}" — known: context, provider_window` }, 400);
     }
+    // An unparseable bound would be compared to captured_at as text and
+    // silently empty (or keep) the series, so refuse it like lane and limit.
+    for (const [name, value] of [["since", sinceIso], ["until", untilIso]] as const) {
+      if (value !== undefined && Number.isNaN(Date.parse(value))) {
+        return c.json({ error: `invalid ${name} "${value}" — must be an ISO date or time (e.g. 2026-10-14 or 2026-10-14T09:00:00Z)` }, 400);
+      }
+    }
     let limit: number | undefined;
     if (limitRaw !== undefined) {
       limit = Number(limitRaw);

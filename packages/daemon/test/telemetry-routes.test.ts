@@ -51,6 +51,27 @@ describe("telemetry routes", () => {
     expect(JSON.stringify(body).toLowerCase()).not.toContain("account");
   });
 
+  it.each([
+    ["since", "garbage"],
+    ["until", "garbage"],
+    ["since", "2026-13-45"],
+  ])("GET /usage/series with an unparseable %s=%s is a 400, not a silently filtered series", async (bound, value) => {
+    const res = await appWith(seeded(), NOW).request(`/api/telemetry/usage/series?${bound}=${value}`);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toContain(`invalid ${bound} "${value}"`);
+  });
+
+  it("GET /usage/series still accepts an ISO instant and a bare date as bounds", async () => {
+    const app = appWith(seeded(), NOW);
+    const instant = await app.request("/api/telemetry/usage/series?since=2026-08-07T11:00:00.000Z");
+    expect(instant.status).toBe(200);
+    expect(((await instant.json()) as { rows: unknown[] }).rows.length).toBe(2);
+    const day = await app.request("/api/telemetry/usage/series?since=2026-08-07");
+    expect(day.status).toBe(200);
+    expect(((await day.json()) as { rows: unknown[] }).rows.length).toBe(4);
+  });
+
   it("GET /usage/top ranks the burner top-1 with tokens/hour computed from the series", async () => {
     const app = appWith(seeded(), NOW);
     const res = await app.request("/api/telemetry/usage/top?window_hours=4&top=10");
