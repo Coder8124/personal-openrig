@@ -29,6 +29,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { writeRuntimeStubs } from "./stub-runtimes.js";
 
 // Scrub inherited instance selectors before product modules capture their defaults.
 // Tests can still set explicit overrides after setup; test/provider opt-in flags
@@ -40,6 +41,12 @@ for (const key of [
   "WORKSPACE_CATALOG_PATH", "TOPOLOGY_ROOT", "CONTEXT_ROOT", "CONTEXT_PACKS_ROOT",
   "SKILLS_ROOT", "SHARED_DOCS_ROOT", "FILES_ALLOWLIST", "PROGRESS_SCAN_ROOTS",
   "SESSION_NAME", "NODE_ID", "RIG_ID", "AUTH_BEARER_TOKEN", "TERMINAL_BEARER_TOKEN",
+  // Slice 15: a seat with compact output on must not change what the suite prints.
+  "OUTPUT_COMPACT",
+  // Slice 01: a seat with usage windows on must not change what the suite reads.
+  "PROVIDER_USAGE_WINDOWS",
+  // A seat with input-box verification on must not change what the transport suites verify.
+  "TRANSPORT_VERIFY_INPUT_BOX",
 ]) {
   delete process.env[`OPENRIG_${key}`];
   delete process.env[`RIGGED_${key}`];
@@ -78,6 +85,15 @@ if (process.env["OPENRIG_E2E_REAL_CODEX"] !== "1") {
     XDG_CONFIG_HOME: ".config", XDG_STATE_HOME: ".local/state",
     XDG_DATA_HOME: ".local/share", XDG_CACHE_HOME: ".cache",
   })) process.env[key] = path.join(userHome, suffix);
+
+  // codex and claude resolve to stubs that answer at once, so no test runs the host's real
+  // binaries (a codex wrapper that hangs under a fixture HOME leaves its probes running).
+  // The stubs live beside the fixture home and go away with it. One PATH entry per worker.
+  const stubDir = writeRuntimeStubs(userHome);
+  const pathEntries = (process.env["PATH"] ?? "").split(path.delimiter);
+  if (pathEntries[0] !== stubDir) {
+    process.env["PATH"] = [stubDir, ...pathEntries.filter((entry) => entry !== stubDir)].join(path.delimiter);
+  }
 }
 
 // (3) ASSERT — capture the resolved home + fail loud if it is not fixture-scoped.

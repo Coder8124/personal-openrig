@@ -8,6 +8,9 @@ This is the canonical reference for the pod-aware RigSpec YAML format. Every fie
 
 ---
 
+For choosing IDs, see [naming rigs, pods and seats](topology-naming.md). Keep the same
+logical names in edges, startup instructions, workflow targets and runtime presets.
+
 ## Minimal Valid Example
 
 ```yaml
@@ -18,7 +21,7 @@ pods:
   - id: dev
     label: Development
     members:
-      - id: impl
+      - id: build
         agent_ref: "local:agents/impl"
         profile: default
         runtime: claude-code
@@ -105,7 +108,7 @@ pods:
           required: true
       actions: []
     members:
-      - id: impl
+      - id: build
         agent_ref: "local:agents/impl"
         profile: default
         runtime: claude-code
@@ -131,7 +134,7 @@ pods:
         cwd: "."
     edges:
       - kind: delegates_to
-        from: impl
+        from: build
         to: qa
 
   - id: rev
@@ -152,13 +155,13 @@ pods:
 edges:
   - kind: delegates_to
     from: orch.lead
-    to: dev.impl
+    to: dev.build
   - kind: delegates_to
     from: orch.peer
     to: dev.qa
   - kind: can_observe
     from: rev.r1
-    to: dev.impl
+    to: dev.build
   - kind: can_observe
     from: rev.r2
     to: dev.qa
@@ -226,12 +229,35 @@ Claude keeps `acceptEdits` and receives inline session settings allowing ordinar
 `rig` commands, project reads and common project test commands (for example,
 `npm test`, `pnpm test`, `pytest`, `go test` and `cargo test`). Lifecycle commands
 such as `rig up`, `rig down`, `rig restore`, `rig bundle install` and seat stop or
-handover are listed as **ask** rules. Native deny and ask rules take precedence
-over allow rules. These are native command-matching rules, not filesystem
-containment: a project's test command can execute code. Flags before the verb
-(for example, `rig --host vps up`) or wrapper commands may not match the lifecycle
-prefixes. OpenRig does not write these settings into a personal or project
-permission file.
+handover ask through a session `PreToolUse` hook. Their literal help forms, such
+as `rig down --help`, `rig bundle install -h` and `rig help down`, run without
+that lifecycle prompt. Native personal, project and managed deny/ask rules still
+apply; OpenRig does not remove or override them.
+
+For allowances, the hook recognizes literal command words (including quoted or absolute paths),
+leading environment assignments that do not change executable lookup or startup,
+and `env`, `command` and `exec` wrappers without options other than `--`.
+Relative executable paths and assignments such as `PATH` or `NODE_OPTIONS` stay
+with native checks. The same existing team allowances apply after spelling
+normalization; project `node_modules/.bin/vitest` and `jest` paths match their
+existing `npx` allowances. It does not automatically allow pipelines, command
+substitutions, redirects, heredocs, shell functions or other unrecognized syntax.
+Lifecycle prefixes are checked at every word position, including after wrappers,
+control-flow words and CLI argument separators. A `--` separator before or after
+the subcommand ends option parsing, so a later `--help` is an operand and still
+asks. Ask detection also scans with comment text retained, so a `#` inside a
+substitution does not hide a later lifecycle command. Unquoted prose or comments
+containing a lifecycle command may also ask; ordinary trailing comments do not
+change allowance matching. Quoted messages and quoted heredoc bodies remain data.
+Arithmetic shifts are not treated as heredoc operators. These are command
+allowances, not containment: a project's test command can execute code. The
+hook and allowances are passed with `--settings` at launch, including resume
+and fork; nothing is written to personal or project permission files.
+
+If the helper asset is missing at launch, OpenRig falls back to the native lifecycle
+ask rules; help can prompt in that fallback. A helper that disappears or times out
+after launch cannot supply a decision, leaving Claude's remaining native rules
+in effect. The hook is a convenience policy, not a containment boundary.
 
 Codex keeps `workspace-write` with its existing approval policy and receives the
 configured OpenRig workspace root plus its pod's shared state directory as
@@ -371,7 +397,7 @@ directory's `CLAUDE.md`, including blocks written by other rigs.
 | `profile` | string | yes | — | Profile name from the referenced AgentSpec. Use `default` for the default profile. Exception: `none` for terminal nodes. |
 | `codex_config_profile` | string | no | — | Codex-only native profile passed as `-p <name>`; letters, numbers, `_`, `.`, `-`. Separate from the AgentSpec `profile`. With the normal launch mode, this replaces OpenRig's explicit workspace-write sandbox flag. A full-bypass policy instead emits danger-full-access and omits this profile argument. |
 | `runtime` | string | yes | — | Agent runtime. Current supported values: `claude-code`, `codex`, `pi`, `omp`, `terminal`, `stub`. `stub` is a deterministic test harness, not an agent: a Node runner in the seat's tmux pane goes through the normal launch, skill projection, startup-file and readiness path, follows `<cwd>/.openrig/stub/script.json` when present, and calls no model. See "What a stub can and cannot prove" in `docs/as-built/test-layers.md`. |
-| `cwd` | string | yes | — | Working directory for the agent. A relative path resolves against the rig root (the directory containing the rig spec); an absolute path is used as is. Use `"."` for the rig root itself. Can be overridden at launch time with `rig up --cwd`. A cwd inside the OpenRig installation fails preflight unless `--cwd` is given. |
+| `cwd` | string | yes | — | Working directory for the agent. A relative path resolves against the rig root (the directory containing the rig spec). If that path exists as written, it is used. Otherwise a leading `~` or `~/` expands to the home directory (`~user` does not) and `$VAR` / `${VAR}` expand from the daemon host's environment; a relative result still resolves against the rig root. A reference to an unset variable stays as written, so the cwd is that literal path and works only if it exists. Use `"."` for the rig root itself. Can be overridden at launch time with `rig up --cwd`. A cwd inside the OpenRig installation fails preflight unless `--cwd` is given. |
 | `label` | string | no | — | Human-readable member name. Shown in UI when present. |
 | `model` | string | no | — | Model override. Runtime-specific (e.g., `claude-opus-4-6` for Claude Code). |
 | `effort` | string | no | — | Reasoning effort override, trimmed. A non-string value is ignored with an advisory. |
@@ -380,7 +406,7 @@ directory's `CLAUDE.md`, including blocks written by other rigs.
 | `restore_policy` | string | no | the AgentSpec's | Restore behavior. One of: `resume_if_possible`, `relaunch_fresh`, `checkpoint_only`. The default comes from the AgentSpec's `defaults.lifecycle` (else `resume_if_possible`) as narrowed by its profile; a member value may only narrow it further, in that order. |
 | `compaction_strategy` | string | no | — | `default-compaction`, `managed-compaction`, `handover` or `apprentice-handover`; `harness_native` and `pod_continuity` are accepted as deprecated aliases, and `custom_prompt` is refused. |
 | `mechanic` | string | no | — | A canonical `seat@rig` session address, for `apprentice-handover`. |
-| `session_source` | object | no | — | Start the seat from an existing session: `fork` with `native_id`, `rebuild` with `artifact_set`, or `agent_image` with `image_name`. Not valid on terminal members. |
+| `session_source` | object | no | — | Start the seat from an existing session: `fork` with `native_id`, `rebuild` with `artifact_set`, or `agent_image` with `image_name`. A Claude Code `fork` needs Claude Code 2.0.73 or later. Not valid on terminal members. |
 | `starter_ref` | object | no | — | `{ name }` of an agent starter (`^[a-zA-Z0-9][a-zA-Z0-9_-]*$`) whose files lead the seat's startup. Not valid on terminal members or with a fork. |
 | `startup` | StartupBlock | no | — | Member-level startup files and actions. Applied only to this member. |
 
@@ -430,7 +456,7 @@ The canonical session name is derived from the pod ID, member ID, and rig name:
 {podId}-{memberId}@{rigName}
 ```
 
-Example: pod `dev`, member `impl`, rig `my-team` → session `dev-impl@my-team`
+Example: pod `dev`, member `build`, rig `my-team` → session `dev-build@my-team`
 
 Pod and member IDs cannot contain `@` because the first `@` separates their portion
 of the session address from the rig name. Rig names may still contain `@`.
@@ -459,13 +485,13 @@ Edges within a pod use **unqualified member IDs** (just the member `id`, not `po
 pods:
   - id: dev
     members:
-      - id: impl
+      - id: build
         # ...
       - id: qa
         # ...
     edges:
       - kind: delegates_to
-        from: impl      # NOT dev.impl
+        from: build     # NOT dev.build
         to: qa          # NOT dev.qa
 ```
 
@@ -479,7 +505,7 @@ Edges between pods use **fully-qualified `pod.member` IDs**:
 edges:
   - kind: delegates_to
     from: orch.lead     # pod.member format
-    to: dev.impl        # pod.member format
+    to: dev.build       # pod.member format
 ```
 
 Cross-pod edges must reference different pods. An edge where both `from` and `to` are in the same pod is a validation error — use pod-local edges instead.

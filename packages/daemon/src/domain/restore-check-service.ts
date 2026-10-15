@@ -6,7 +6,7 @@ import { shellQuote as quoteShellArgument } from "../adapters/shell-quote.js";
 import { reanchorBuiltinStartupFile, reanchorShippedProjectionEntry } from "./builtin-startup-files.js";
 import { validatePreRestore } from "./restore-preconditions.js";
 import type { CurrentStateRehydrateEligibility } from "./rehydrate-eligibility.js";
-import type { Snapshot, RigServicesRecord } from "./types.js";
+import type { Snapshot, RigServicesRecord, SeatIdentityVerdict } from "./types.js";
 
 // --- Types ---
 
@@ -185,6 +185,8 @@ export interface NodeInventoryEntry {
   runtime: string | null;
   sessionStatus: string | null;
   startupStatus: string | null;
+  storedStartupStatus?: string | null;
+  identityVerdict?: SeatIdentityVerdict | null;
   tmuxAttachCommand: string | null;
   latestError: string | null;
   cwd?: string | null;
@@ -254,6 +256,10 @@ export class RestoreCheckService {
     this.deps = deps;
   }
 
+  /**
+   * Compute scoped restore checks and recovery guidance from daemon, rig and
+   * seat evidence without launching occupants.
+   */
   check(opts: RestoreCheckOpts): RestoreCheckResult {
     const checks: CheckEntry[] = [];
     // rev1-r2 no-false-ready: ready-seat caveat signals that default compact
@@ -381,7 +387,7 @@ export class RestoreCheckService {
         checks.push(transcriptCheck);
         rigChecks.push(transcriptCheck);
 
-        const resumeCheck = this.checkResumePath(node);
+        const resumeCheck = this.checkResumePath(node, rig.name);
         checks.push(resumeCheck);
         rigChecks.push(resumeCheck);
 
@@ -835,6 +841,20 @@ export class RestoreCheckService {
       };
     }
 
+    if (node.sessionStatus === "running" && node.storedStartupStatus === "ready"
+      && node.startupStatus === "attention_required"
+      && (node.identityVerdict?.verdict === "mismatch" || node.identityVerdict?.verdict === "pane_missing")) {
+      return {
+        check,
+        status: "red",
+        evidence: `Seat identity needs verification: verdict=${node.identityVerdict.verdict} reason=${node.identityVerdict.reason ?? "unknown"}; stored startupStatus=ready`,
+        remediation: node.identityVerdict.verdict === "mismatch"
+          ? "Verify the current pane identity, then use rig seat clear-attention for this seat and rerun rig restore-check"
+          : "If the seat's tmux session or pane is gone, restore or relaunch the seat; if it now runs in another pane of its session, rig seat clear-attention for this seat rebinds and verifies it. Then rerun rig restore-check.",
+        remediationSafe: false,
+      };
+    }
+
     if (node.sessionStatus !== "running" || node.startupStatus !== "ready") {
       const latestError = node.latestError ? ` latestError=${node.latestError}` : "";
       return {
@@ -854,7 +874,11 @@ export class RestoreCheckService {
     };
   }
 
-  private checkResumePath(node: NodeInventoryEntry): CheckEntry {
+  /**
+   * Report available seat attachment or a read-only restore-plan command.
+   * Missing attachment does not establish whether an earlier token can resume.
+   */
+  private checkResumePath(node: NodeInventoryEntry, rigName: string): CheckEntry {
     const session = node.canonicalSessionName ?? node.logicalId;
     if (node.tmuxAttachCommand) {
       return { check: `seat.${session}.resume-path`, status: "green", evidence: node.tmuxAttachCommand, remediation: "" };
@@ -862,7 +886,8 @@ export class RestoreCheckService {
     return {
       check: `seat.${session}.resume-path`, status: "yellow",
       evidence: "No attach command available",
-      remediation: "Session will be created fresh on restore",
+      // Whether restore resumes, starts fresh or stops for a decision is per seat; the plan says which.
+      remediation: `No live session to attach. Preview what restore would do for this seat with: rig up ${shellQuote(rigName)} --existing --plan`,
       remediationSafe: true,
     };
   }

@@ -18,6 +18,7 @@ import type {
   ViewState,
   ViewStateStore,
   NavigationFrame,
+  PendingDrill,
   SpecKind,
 } from "./types.js";
 import { SECTION_REGISTRY, SYSTEM_SECTIONS } from "./sections.js";
@@ -89,13 +90,16 @@ export function createViewState(options: CreateViewStateOptions): ViewStateStore
 
   function dispatch(action: Action): ViewState {
     const previous = state;
-    if (["attention-category", "attention-open", "terminal-preview", "project-select", "jump", "drill", "cross", "tab", "scopes-mission-open", "scopes-open", "health-open", "execution-open", "recent-open", "timezone", "config-category", "config-setting"].includes(action.type)) state = { ...state, file: null, externalUrl: null, recentOpen: null, timeZoneHelp: false, attentionOpen: null, specLaunch: null };
+    if (["attention-category", "attention-open", "terminal-preview", "project-select", "jump", "drill", "cross", "tab", "scopes-mission-open", "scopes-open", "health-open", "execution-open", "recent-open", "timezone", "config-category", "config-setting"].includes(action.type)) state = { ...state, file: null, externalUrl: null, recentOpen: null, timeZoneHelp: false, attentionOpen: null, specLaunch: null, ...(state.pendingDrill ? { pendingDrill: null } : {}) };
     state = reduce(state, action, getSnapshot());
+    // A pending address belongs to the Topology landing it opened; leaving it cancels the address.
+    if (state.pendingDrill && (state.section !== "topology" || state.drill.length > 0)) state = { ...state, pendingDrill: null };
     // Connections is a side trip from work, including explorer/palette entry.
     if (action.type === "jump" && ![...SYSTEM_SECTIONS, "needs"].includes(action.section) && ![...SYSTEM_SECTIONS, "needs"].includes(previous.section)) state.history = [];
     // A filter changes the current view; clearing it must not add the detail
-    // being left back onto history (Escape would then cycle forever).
-    else if (!["back", "execution-close", "filter"].includes(action.type) && !state.lastError && location(previous) !== location(state)) {
+    // being left back onto history (Escape would then cycle forever). A resolved
+    // address replaces its interim landing, so Back returns where it was typed.
+    else if (!["back", "execution-close", "filter", "resolve-pending"].includes(action.type) && !state.lastError && location(previous) !== location(state)) {
       state.history = [...(previous.history ?? []), navigationFrame(previous)].slice(-50);
     }
     for (const fn of listeners) fn(state);
@@ -316,15 +320,26 @@ function reduce(state: ViewState, action: Action, snap: FleetSnapshot): ViewStat
     }
     case "drill": {
       next.specLaunch = null;
-      const drilled = drillTo(next, action.resource, action.name, snap, action.target, action.specKind);
-      if (drilled.lastError) return drilled;
-      const sectionState = clearScopeCoordinatesOnSectionChange(state, drilled);
-      const spec = action.resource === "spec" ? findSpec(snap, action.name, action.specKind) : null;
-      // filters are VIEW-scoped: a drill that crosses sections clears the old
-      // section's filter (founder direct-drive catch — a specs filter leaked
-      // into the topology table and blanked it)
-      const filter = drilled.section === state.section ? drilled.filter : "";
-      return syncSelection({ ...resetContent({ ...sectionState, filter, viewTab: action.resource === "spec" && (!spec || spec.kind === "rig") ? "graph" : "table" }), healthOpen: null }, snap);
+      const resource = action.resource;
+      // Terminals, Needs, System, Scopes, Config, Specs and file pages read no
+      // rigs. Rather than call a running rig absent, switch to Topology and
+      // resolve once its own read settles.
+      if (resource !== "spec" && !snap.hosts.some((host) => host.rigs.length > 0)) {
+        const seq = (state.pendingSeq ?? 0) + 1;
+        const pendingDrill: PendingDrill = { resource, name: action.name, ...(action.target ? { target: action.target } : {}), seq };
+        const landing = clearScopeCoordinatesOnSectionChange(state, { ...next, section: "topology", drill: [], runningOf: null });
+        return syncSelection({ ...resetContent({ ...landing, filter: state.section === "topology" ? next.filter : "", viewTab: "table" }), healthOpen: null, pendingDrill, pendingSeq: seq }, snap);
+      }
+      return applyDrill(state, next, action, snap);
+    }
+    case "resolve-pending": {
+      const pending = state.pendingDrill;
+      if (!pending) return next;
+      const resolved = applyDrill(state, { ...next, pendingDrill: null }, { type: "drill", resource: pending.resource, name: pending.name, target: pending.target }, snap);
+      // An incomplete Topology read cannot prove absence.
+      if (resolved.lastError?.startsWith("no such ") && (snap.readErrors.length > 0 || !snap.hydratedAt))
+        return { ...resolved, lastError: `could not confirm ${pending.resource} "${pending.name}": ${snap.readErrors[0] ?? "the Topology read did not complete"}` };
+      return resolved;
     }
     case "cross": {
       const crossed = crossNav(next, action.kind, action.name, snap, action.target);
@@ -345,6 +360,18 @@ function location(s: ViewState): string {
 function navigationFrame(s: ViewState): NavigationFrame {
   const { attentionCategory, attentionOpen, project, terminalView, terminalPage, file, externalUrl, section, drill, filter, selection, runningOf, viewTab, contentOffset, contentMaxOffset, contentTargetCount, contentSelection, focusedPane, scopesMission, scopesSelected, scopesCollapseReqs, scopesNarrative, executionOpen, expanded, recentOpen, timeZoneHelp, configCategory, configKey } = s;
   return { attentionCategory, attentionOpen, project, terminalView, terminalPage, file, externalUrl, section, drill, filter, selection, runningOf, viewTab, contentOffset, contentMaxOffset, contentTargetCount, contentSelection, focusedPane, scopesMission, scopesSelected, scopesCollapseReqs, scopesNarrative, executionOpen, expanded, recentOpen, timeZoneHelp, configCategory, configKey };
+}
+
+function applyDrill(state: ViewState, next: ViewState, action: Extract<Action, { type: "drill" }>, snap: FleetSnapshot): ViewState {
+  const drilled = drillTo(next, action.resource, action.name, snap, action.target, action.specKind);
+  if (drilled.lastError) return drilled;
+  const sectionState = clearScopeCoordinatesOnSectionChange(state, drilled);
+  const spec = action.resource === "spec" ? findSpec(snap, action.name, action.specKind) : null;
+  // filters are VIEW-scoped: a drill that crosses sections clears the old
+  // section's filter (founder direct-drive catch — a specs filter leaked
+  // into the topology table and blanked it)
+  const filter = drilled.section === state.section ? drilled.filter : "";
+  return syncSelection({ ...resetContent({ ...sectionState, filter, viewTab: action.resource === "spec" && (!spec || spec.kind === "rig") ? "graph" : "table" }), healthOpen: null }, snap);
 }
 
 function clearScopeCoordinatesOnSectionChange(previous: ViewState, next: ViewState): ViewState {
@@ -591,7 +618,7 @@ export function computeExplorerRows(state: ViewState, snap: FleetSnapshot): Expl
   const rows: ExplorerRow[] = [];
   for (const section of state.sections) {
     const active = section.name === state.section || section.name === "system" && SYSTEM_SECTIONS.includes(state.section);
-    if (section.name === "config" || section.name === "connections") continue;
+    if (section.name === "config" || section.name === "connections" || section.name === "usage" || section.name === "usage-hosts" || section.name === "cost") continue;
     const label =
       section.name === "topology"
         ? "TOPOLOGY"
@@ -612,7 +639,10 @@ export function computeExplorerRows(state: ViewState, snap: FleetSnapshot): Expl
       rows.push({ label: "  Health", key: "system:health", action: { type: "jump", section: "system" } },
         { label: "  Configuration", key: "section:config", action: { type: "jump", section: "config" } });
       if (state.section === "config") rows.push(...CONFIG_CATEGORIES.map((c) => ({ label: "    " + c.label, key: `config:${c.id}`, action: { type: "config-category" as const, category: c.id } })));
-      rows.push({ label: "  Connections", key: "section:connections", action: { type: "jump", section: "connections" } });
+      rows.push({ label: "  Connections", key: "section:connections", action: { type: "jump", section: "connections" } },
+        { label: "  Usage", key: "section:usage", action: { type: "jump", section: "usage" } },
+        { label: "  Usage · all hosts", key: "section:usage-hosts", action: { type: "jump", section: "usage-hosts" } },
+        { label: "  Cost", key: "section:cost", action: { type: "jump", section: "cost" } });
       if (state.history?.length) rows.push({ label: "  Back", key: "system:back", action: { type: "back" } });
       continue;
     }
