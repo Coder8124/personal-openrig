@@ -1413,6 +1413,18 @@ describe("Bundle API routes", () => {
       const comboBody = await combo.json();
       expect(comboBody.total).toBe(1);
       expect(comboBody.records[0].installedAt).toBe("2026-05-18T12:00:00Z");
+
+      // An unparseable since is a 400 naming the value, not a silently empty history
+      for (const bad of ["garbage", "2026-13-45"]) {
+        const refused = await app.request(`/api/bundles/history?since=${bad}`);
+        expect(refused.status).toBe(400);
+        expect((await refused.json()).error).toContain(`invalid since "${bad}"`);
+      }
+
+      // A bare date still filters (2026-05-18 sorts before every record that day)
+      const day = await app.request("/api/bundles/history?since=2026-05-18");
+      expect(day.status).toBe(200);
+      expect((await day.json()).total).toBe(3);
     } finally {
       if (origHome === undefined) delete process.env.OPENRIG_HOME;
       else process.env.OPENRIG_HOME = origHome;

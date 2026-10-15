@@ -1100,6 +1100,11 @@ bundleRoutes.post("/inspect", async (c) => {
 bundleRoutes.get("/history", async (c) => {
   const rig = c.req.query("rig");
   const since = c.req.query("since");
+  // installedAt is compared as text, so an unparseable since would silently
+  // empty (or keep) the history; refuse it instead.
+  if (typeof since === "string" && since.length > 0 && Number.isNaN(Date.parse(since))) {
+    return c.json({ error: `invalid since "${since}" — must be an ISO date or time (e.g. 2026-10-14 or 2026-10-14T09:00:00Z)` }, 400);
+  }
   const reader = new BundleAuditReader({
     opts: { auditPath: bundleAuditPath() },
     fsOps: auditFsOps(),
