@@ -42,8 +42,6 @@ export function telemetryRoutes(deps: TelemetryRouteDeps): Hono {
     if (lane && lane !== "context" && lane !== "provider_window") {
       return c.json({ error: `unknown lane "${lane}" — known: context, provider_window` }, 400);
     }
-    // An unparseable bound would be compared to captured_at as text and
-    // silently empty (or keep) the series, so refuse it like lane and limit.
     let limit: number | undefined;
     if (limitRaw !== undefined) {
       limit = Number(limitRaw);
